@@ -7,13 +7,6 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/models?output_modalities=all"
 STATE_FILE = "models.json"
 
 
-def to_float(val, default=1.0):
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return default
-
-
 def send_notification(text):
     tg_token = os.environ.get("TELEGRAM_TOKEN", "").strip()
     tg_chat = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
@@ -39,7 +32,7 @@ def send_notification(text):
         req = urllib.request.Request(
             url,
             data=text.encode("utf-8"),
-            headers={"Title": "OpenRouter Radar", "Priority": "high"}
+            headers={"Title": "OpenRouter Stealth Radar", "Priority": "high"}
         )
         try:
             urllib.request.urlopen(req, timeout=15)
@@ -47,10 +40,30 @@ def send_notification(text):
             print(f"ntfy hatasi: {e}")
 
 
+def is_stealth_model(m):
+    m_id = m.get("id", "").lower()
+    name = (m.get("name") or "").lower()
+    desc = (m.get("description") or "").lower()
+
+    # 1. Resmi stealth/ saglayicisi (ox-alpha, crouton-alpha, space-bunny-alpha vb.)
+    if m_id.startswith("stealth/"):
+        return True
+
+    # 2. ID veya isimde dogrudan "stealth" geciyorsa
+    if "stealth" in m_id or "stealth" in name:
+        return True
+
+    # 3. Aciklamada aktif stealth/gizli model oldugu yaziyorsa
+    if "is a stealth model" in desc or "is an anonymous" in desc:
+        return True
+
+    return False
+
+
 def main():
     req = urllib.request.Request(
         OPENROUTER_URL,
-        headers={"User-Agent": "OpenRouter-Radar/1.0"}
+        headers={"User-Agent": "OpenRouter-Stealth-Radar/1.0"}
     )
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
@@ -67,69 +80,40 @@ def main():
     is_first_run = not os.path.exists(STATE_FILE)
     if not is_first_run:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
-            known = json.load(f)
+            loaded = json.load(f)
+            # Eski sozluk formatindan liste formatina sorunsuz gecis
+            known_ids = set(loaded.keys() if isinstance(loaded, dict) else loaded)
     else:
-        known = {}
+        known_ids = set()
 
-    new_known = {}
-    alerts = []
+    # Sadece stealth modelleri filtrele
+    current_stealth = [m for m in models if is_stealth_model(m)]
+    current_ids = sorted([m["id"] for m in current_stealth])
 
-    for m in models:
-        m_id = m["id"]
-        pricing = m.get("pricing") or {}
-        is_free = (
-            to_float(pricing.get("prompt")) == 0.0
-            and to_float(pricing.get("completion")) == 0.0
-        )
-        new_known[m_id] = 1 if is_free else 0
-
-        if is_first_run:
-            continue
-
-        was_known = m_id in known
-        became_free = was_known and known[m_id] == 0 and is_free
-
-        if not was_known or became_free:
-            lower_id = m_id.lower()
-            lower_name = (m.get("name") or "").lower()
-            is_stealth = ("stealth" in lower_id) or ("stealth" in lower_name)
-
-            # Sadece 0$ olanlar veya ID/isminde "stealth" geçenler
-            if is_free or is_stealth:
-                alerts.append({
-                    "model": m,
-                    "is_free": is_free,
-                    "reason": "🆕 YENİ MODEL" if not was_known else "💸 ÜCRETSİZ OLDU"
-                })
-
-    if new_known != known:
+    if set(current_ids) != known_ids:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(new_known, f, indent=2, sort_keys=True)
+            json.dump(current_ids, f, indent=2)
 
     if is_first_run:
         send_notification(
-            f"✅ OpenRouter Radar (GitHub Actions) Başlatıldı!\n"
-            f"Hafızaya alınan model sayısı: {len(models)}\n"
-            f"Bundan sonra yeni 0$ veya stealth modeller geldiğinde bildirim alacaksınız."
+            f"✅ OpenRouter Stealth Radar Başlatıldı!\n"
+            f"Şu an aktif stealth model sayısı: {len(current_ids)}"
         )
         return
 
-    for item in alerts:
-        m = item["model"]
-        ctx_len = m.get("context_length")
-        ctx = f"{round(ctx_len / 1024)}K" if ctx_len else "?"
-        prompt_cost = to_float((m.get("pricing") or {}).get("prompt"), 0.0) * 1e6
-        price_text = "ÜCRETSİZ ($0)" if item["is_free"] else f"Prompt: ${prompt_cost:.2f}/M"
-
-        msg = (
-            f"{item['reason']}\n"
-            f"🤖 İsim: {m.get('name', m['id'])}\n"
-            f"🆔 ID: {m['id']}\n"
-            f"💰 Fiyat: {price_text}\n"
-            f"📏 Context: {ctx}\n"
-            f"🔗 https://openrouter.ai/{m['id']}"
-        )
-        send_notification(msg)
+    # Yeni eklenen stealth modelleri bildir
+    for m in current_stealth:
+        if m["id"] not in known_ids:
+            ctx_len = m.get("context_length")
+            ctx = f"{round(ctx_len / 1024)}K" if ctx_len else "?"
+            msg = (
+                f"🕵️‍♂️ YENİ STEALTH MODEL!\n"
+                f"🤖 İsim: {m.get('name', m['id'])}\n"
+                f"🆔 ID: {m['id']}\n"
+                f"📏 Context: {ctx}\n"
+                f"🔗 https://openrouter.ai/{m['id']}"
+            )
+            send_notification(msg)
 
 
 if __name__ == "__main__":

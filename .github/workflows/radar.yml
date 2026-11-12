@@ -1,0 +1,34 @@
+name: OpenRouter Radar
+
+on:
+  schedule:
+    # 15 dakikalik araliklarla calisir (GitHub yogunluguna yakalanmamak icin ara dakikalarda)
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Depoyu cek
+        uses: actions/checkout@v4
+
+      - name: Modelleri kontrol et
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 check.py
+
+      - name: Degisiklik varsa kaydet
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add models.json
+            git commit -m "Update models.json"
+            git push
+          fi
